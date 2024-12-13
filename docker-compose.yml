@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  web:
+    build: .
+    ports:
+      - "8080:8080"
+      - "8081:8081"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ASPNETCORE_Kestrel__Certificates__Default__Password=Password  # Replace with your certificate password
+      - ASPNETCORE_Kestrel__Certificates__Default__Path=/https/certs/Certi.pfx  # Path inside the container
+      - ConnectionStrings__Tododatabase=Server=sqlserver,1433;Database=Tododatabase;Trusted_Connection=True;  # Using Windows Authentication
+    volumes:
+      - //c/Users/TEC/.aspnet/https:/https/certs  # Mount the local certificate directory (change path if necessary)
+    depends_on:
+      - sqlserver
+
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      - ACCEPT_EULA=Y
+      - SA_PASSWORD=Password123  # This is for SQL Authentication; make sure it matches the DB setup if you're using SQL Authentication
+    ports:
+      - "1433:1433"
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge

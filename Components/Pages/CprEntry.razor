@@ -1,0 +1,90 @@
+﻿@page "/cpr-entry"
+@inject AuthenticationStateProvider AuthenticationStateProvider
+@inject HashingHandler HashingHandler
+
+@using BlazorApp1.Codes
+@using Microsoft.AspNetCore.Components.Authorization
+@using System.Security.Claims
+
+@using Microsoft.AspNetCore.Identity
+@using SoftwareTest.Data
+@using SoftwareTest.Models
+@using Microsoft.EntityFrameworkCore;
+
+@inject NavigationManager Navigation
+@inject UserManager<ApplicationUser> UserManager
+@inject TododatabaseContext DbContext
+
+<h3>Enter your CPR number</h3>
+
+<EditForm Model="cprModel" OnValidSubmit="HandleValidSubmit">
+    <DataAnnotationsValidator />
+    <ValidationSummary />
+
+    <InputText id="cprNumber" @bind-Value="cprModel.CprNumber" placeholder="CPR Number" class="form-control" />
+    <button type="submit" class="btn btn-primary">Submit</button>
+
+    @if (!string.IsNullOrEmpty(errorMessage))
+    {
+        <div class="text-danger">@errorMessage</div>
+    }
+</EditForm>
+
+@code {
+    private Cpr cprModel = new Cpr();
+    private ClaimsPrincipal user;
+    private string errorMessage;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        user = authState.User;
+
+        if (user.Identity?.IsAuthenticated != true)
+        {
+            // If the user is not authenticated, redirect to login
+            Navigation.NavigateTo("/login");
+        }
+    }
+
+    private async Task HandleValidSubmit()
+    {
+        var userId = user.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+
+        // Check if the CPR already exists for this user
+        var existingCpr = await DbContext.CprTables
+                                        .FirstOrDefaultAsync(c => c.UserId == userId);
+
+        if (existingCpr == null)
+        {
+            // Hash the CPR before saving
+            var hashedCpr = HashingHandler.PBKDF2Hashing(cprModel.CprNumber);
+
+            // Save the hashed CPR
+            cprModel.UserId = userId;
+            cprModel.CprNumber = hashedCpr;
+            DbContext.CprTables.Add(cprModel);
+            await DbContext.SaveChangesAsync();
+
+            // Redirect to the Todo page
+            Navigation.NavigateTo("/todo");
+        }
+        else
+        {
+            // Hash the input CPR for validation
+            var hashedInput = HashingHandler.PBKDF2Hashing(cprModel.CprNumber);
+
+            // Compare the hashed input with the stored hash
+            if (existingCpr.CprNumber == hashedInput)
+            {
+                // If the CPR matches, redirect to /todo
+                Navigation.NavigateTo("/todo");
+            }
+            else
+            {
+                // If the CPR doesn't match, show an error message and stay on the same page
+                errorMessage = "Wrong CPR number. Please try again.";
+            }
+        }
+    }
+}

@@ -1,0 +1,159 @@
+﻿@page "/todo"
+@using System.Security.Claims
+@using Microsoft.EntityFrameworkCore
+@using SoftwareTest.Data
+@using SoftwareTest.Models
+@using BlazorApp1.Codes
+@inject AuthenticationStateProvider AuthenticationStateProvider
+@inject NavigationManager NavigationManager
+@inject TododatabaseContext DbContext
+@inject SymetricEncryptionHandler EncryptionHandler
+@inject AsymmetricEncryptionHandler AsymmetricEncryptionHandler
+
+<h3>Your Todo List</h3>
+
+<AuthorizeView>
+    <Authorized Context="contextUser">
+        <!-- Add Todo Item Form -->
+        <div>
+            <h4>Add a new Todo item:</h4>
+            <EditForm Model="newTodo" OnValidSubmit="AddTodoItem">
+                <DataAnnotationsValidator />
+                <ValidationSummary />
+                <InputText @bind-Value="newTodo.Description" class="form-control" placeholder="Enter your todo item" />
+                <button type="submit" class="btn btn-primary">Add Todo</button>
+            </EditForm>
+        </div>
+
+        <!-- Display Todo Items -->
+        <div>
+            <h4>Your Todo Items:</h4>
+            <ul class="list-group">
+                @foreach (var todo in todoItems)
+                {
+                    <li class="list-group-item">
+                        @if (todo.Id == itemToEdit?.Id)
+                        {
+                            <EditForm Model="itemToEdit" OnValidSubmit="SaveEditedTodoItem">
+                                <DataAnnotationsValidator />
+                                <ValidationSummary />
+                                <InputText @bind-Value="itemToEdit.Description" class="form-control" />
+                                <button type="submit" class="btn btn-success">Save</button>
+                                <button type="button" class="btn btn-secondary" @onclick="() => itemToEdit = null">Cancel</button>
+                            </EditForm>
+                        }
+                        else
+                        {
+                            @todo.Description
+                            <button class="btn btn-danger btn-sm float-end" @onclick="() => DeleteTodoItem(todo.Id)">Delete</button>
+                            <button class="btn btn-warning btn-sm float-end me-2" @onclick="() => EditTodoItem(todo)">Edit</button>
+                        }
+                    </li>
+                }
+            </ul>
+        </div>
+    </Authorized>
+
+    <NotAuthorized>
+        <p>You must be logged in to view your Todo list.</p>
+    </NotAuthorized>
+</AuthorizeView>
+
+@code {
+    private ClaimsPrincipal user;
+    private List<TodoItem> todoItems = new();
+    private TodoItem newTodo = new();
+    private TodoItem itemToEdit;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        user = authState.User;
+
+        if (user.Identity?.IsAuthenticated != true)
+        {
+            NavigationManager.NavigateTo("/Account/Login");
+        }
+        else
+        {
+            await LoadTodoItems();
+        }
+    }
+
+    private async Task LoadTodoItems()
+    {
+        var userId = user.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        var cpr = await DbContext.CprTables.FirstOrDefaultAsync(c => c.UserId == userId);
+
+        if (cpr != null)
+        {
+            var encryptedItems = await DbContext.TodoItems
+                .Where(t => t.CprTableId == cpr.Id)
+                .AsNoTracking()
+                .ToListAsync();
+
+            // Decrypt each item for display
+            todoItems = encryptedItems.Select(item => new TodoItem
+                {
+                    Id = item.Id,
+                    CprTableId = item.CprTableId,
+                    Description = AsymmetricEncryptionHandler.Decrypt(item.Description) // Decrypt here
+                }).ToList();
+        }
+    }
+
+    private async Task AddTodoItem()
+    {
+        var userId = user.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        var cpr = await DbContext.CprTables.FirstOrDefaultAsync(c => c.UserId == userId);
+
+        if (cpr != null)
+        {
+            // Encrypt the Todo description before saving
+            newTodo.Description = AsymmetricEncryptionHandler.Encrypt(newTodo.Description);
+
+            newTodo.CprTableId = cpr.Id;
+            DbContext.TodoItems.Add(newTodo);
+            await DbContext.SaveChangesAsync();
+            await LoadTodoItems();
+            newTodo = new TodoItem();
+            StateHasChanged();
+        }
+    }
+
+    private async Task DeleteTodoItem(int todoId)
+    {
+        var todoItem = await DbContext.TodoItems.FindAsync(todoId);
+        if (todoItem != null)
+        {
+            DbContext.TodoItems.Remove(todoItem);
+            await DbContext.SaveChangesAsync();
+            await LoadTodoItems();
+            StateHasChanged();
+        }
+    }
+
+    private void EditTodoItem(TodoItem todo)
+    {
+        itemToEdit = new TodoItem { Id = todo.Id, Description = todo.Description, CprTableId = todo.CprTableId };
+    }
+
+    private async Task SaveEditedTodoItem()
+    {
+        if (itemToEdit != null && !string.IsNullOrEmpty(itemToEdit.Description))
+        {
+            var todoFromDb = await DbContext.TodoItems.FindAsync(itemToEdit.Id);
+            if (todoFromDb != null)
+            {
+                // Encrypt the updated description before saving
+                todoFromDb.Description = EncryptionHandler.Encrypt(itemToEdit.Description);
+
+                DbContext.TodoItems.Update(todoFromDb);
+                await DbContext.SaveChangesAsync();
+                await LoadTodoItems();
+                itemToEdit = null;
+                StateHasChanged();
+            }
+        }
+    }
+}
